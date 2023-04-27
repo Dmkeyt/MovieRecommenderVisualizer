@@ -1,0 +1,68 @@
+import pandas as pd
+import numpy as np
+import warnings
+from warnings import simplefilter
+
+# Ignore future warnings
+warnings.simplefilter(action='ignore', category=FutureWarning)
+
+#import necessary files
+ratingsData = pd.read_csv("ratings.txt", sep='::', header=None, names = ["UserID", "MovieID", "Rating", "TimeStamp"], engine='python')
+movieData = pd.read_csv("movies.txt", sep='::', header=None, names = ["MovieID", "Title", "Genre"], engine='python')
+
+ratingsData = ratingsData.drop('TimeStamp', axis=1)
+movieData = movieData.drop('Genre', axis=1)
+
+ratingsData = pd.merge(movieData, ratingsData, on='MovieID') # so we have the titles in the structure
+
+cols = ratingsData.columns.tolist()
+cols.insert(0, cols.pop(cols.index('UserID')))
+ratingsData = ratingsData[cols]
+pattern = r'\([^)]*\)' # get rid of all parentheses within the movie titles within the data set
+ratingsData['Title'] = ratingsData['Title'].str.replace(pattern, '')
+ratingsData['Title'] = ratingsData['Title'].str.strip()
+
+stats = ratingsData.groupby('Title').agg({'Rating': [np.size, np.mean]})# find number of ratings for all movies
+popular = stats['Rating']['size'] >= 1000 # drop movies beneath threshold rating count
+stats[popular].sort_values([('Rating', 'mean')], ascending = False) # sort leftover movies by average rating
+
+ratingsReduced = pd.merge(ratingsData, stats, on='Title')
+# rating, size is the number of ratings a movie received
+scraps = ratingsReduced[ratingsReduced[('Rating', 'size')] < 1000].index
+ratingsReduced.drop(scraps , inplace=True)
+ratingsReduced.head()
+
+# create adjacency matrix
+ratingsReduced = ratingsReduced.pivot_table(index = ['UserID'], columns = ['Title'], values = 'Rating')
+
+movie = input('What movie would you like recommendations based off of?\n') # read in movie
+movie = movie.title() # set title case for consistency with data set
+
+if movie[:2] == "A ":
+    movie = movie[2:] + ", A"
+elif movie[:3] == "An ":
+    movie = movie[3:] + ", An"
+elif movie[:4] == "The ":
+    movie = movie[4:] + ", The"
+elif movie[:3] == "La ":
+    movie = movie[3:] + ", La"
+elif movie[:3] == "El ":
+    movie = movie[3:] + ", El"
+
+userMovieRatings = ratingsReduced[movie] # all user rankings of desired movie
+recommendations = ratingsReduced.corrwith(userMovieRatings)
+recommendations = recommendations.dropna()# drop movies with no correlation
+
+# merge stats and recommendations into a combined dataframe
+recDataFrame = stats[popular].join(pd.DataFrame(recommendations, columns = ['similarity']))
+recDataFrame = recDataFrame.sort_values(['similarity'], ascending = False) # sort dataframe by correlation
+
+print(recDataFrame.index[1:6]) # the output here is the movies that the algorithm needs to be run against again
+
+for movie in recDataFrame.index[1:6]:
+    userMovieRatings = ratingsReduced[movie]
+    recommendations = ratingsReduced.corrwith(userMovieRatings)
+    recommendations = recommendations.dropna()
+    tempDataFrame = stats[popular].join(pd.DataFrame(recommendations, columns = ['similarity']))
+    tempDataFrame = tempDataFrame.sort_values(['similarity'], ascending = False)
+    print(tempDataFrame.head(6))
