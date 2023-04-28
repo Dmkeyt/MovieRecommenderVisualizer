@@ -1,0 +1,106 @@
+import pandas as pd
+import numpy as np
+import scipy.stats
+from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.neighbors import NearestNeighbors
+from scipy.sparse import csr_matrix
+from fuzzywuzzy import process
+import warnings
+from warnings import simplefilter
+
+# Ignore future warnings
+warnings.simplefilter(action='ignore', category=FutureWarning)
+
+# loading data sets and dropping unecessary columns
+ratingsData = pd.read_csv("ratings.txt", sep='::', header=None, names = ["UserID", "MovieID", "Rating", "TimeStamp"], engine='python')
+movieData= pd.read_csv("movies.txt", sep='::', header=None, names = ["MovieID", "Title", "Genre"], engine='python')
+ratingsData = ratingsData.drop('TimeStamp', axis=1)
+movieData = movieData.drop('Genre', axis=1)
+
+DataFrame = pd.merge(ratingsData, movieData, on = 'MovieID')
+
+# creating a data frame that consists of the movie and how many ratings it has
+combineMovieRating = DataFrame.dropna(axis = 0, subset = ['Title'])
+movieRatingCount = (combineMovieRating.groupby(by = ['Title'])['Rating'].count().reset_index().rename(columns = {'Rating': 'TotalRatingCount'})[['Title', 'TotalRatingCount']])
+
+# merging the rating count with the main data set
+ratingsWithTotalRatingCount = combineMovieRating.merge(movieRatingCount, left_on = 'Title', right_on ='Title', how = 'left')
+
+# setting the decimal place and gaining insight of the data
+pd.set_option('display.float_format', lambda x: '%.4f' % x)
+
+# looking for movies with over 1000 ratings, to filter out least popular movies and increase the speed of the algorithm
+ratingPopularMovies = ratingsWithTotalRatingCount.query('TotalRatingCount >= 1000')
+
+# creating multiple pivot tables so Ram is not overloaded.
+# Pivot tables are necessary so that everything will be able to be located from the key movie.
+data_split1 = ratingPopularMovies[:1000000].pivot_table(index = 'Title', columns = 'UserID', values = 'Rating').fillna(0)
+data_split2 = ratingPopularMovies[1000000:2000000].pivot_table(index = 'Title', columns = 'UserID', values = 'Rating').fillna(0)
+data_split3 = ratingPopularMovies[2000000:3000000].pivot_table(index = 'Title', columns = 'UserID', values = 'Rating').fillna(0)
+data_split4 = ratingPopularMovies[3000000:4000000].pivot_table(index = 'Title', columns = 'UserID', values = 'Rating').fillna(0)
+data_split5 = ratingPopularMovies[4000000:5000000].pivot_table(index = 'Title', columns = 'UserID', values = 'Rating').fillna(0)
+data_split6 = ratingPopularMovies[5000000:6000000].pivot_table(index = 'Title', columns = 'UserID', values = 'Rating').fillna(0)
+data_split7 = ratingPopularMovies[6000000:7000000].pivot_table(index = 'Title', columns = 'UserID', values = 'Rating').fillna(0)
+data_split8 = ratingPopularMovies[7000000:8000000].pivot_table(index = 'Title', columns = 'UserID', values = 'Rating').fillna(0)
+data_split9 = ratingPopularMovies[8000000:].pivot_table(index = 'Title', columns = 'UserID', values = 'Rating').fillna(0)
+
+# combining the split data sets
+combined_pivot = data_split1.add(data_split2, fill_value=0)
+combined_pivot = combined_pivot.add(data_split3, fill_value=0)
+combined_pivot = combined_pivot.add(data_split4, fill_value=0)
+combined_pivot = combined_pivot.add(data_split5, fill_value=0)
+combined_pivot = combined_pivot.add(data_split6, fill_value=0)
+combined_pivot = combined_pivot.add(data_split7, fill_value=0)
+combined_pivot = combined_pivot.add(data_split8, fill_value=0)
+combined_pivot = combined_pivot.add(data_split9, fill_value=0)
+
+# replacing N/A with zeros of the final combined pivot table
+combined_pivot = combined_pivot.fillna(0)
+
+# Csr_ matrix takes the extremely sparse table and compressed it
+mat_movies = csr_matrix(combined_pivot.values)
+
+# takes the mat_matrix and runs a KNN algorithm to find most similar movies based on ratings
+# here we used cosine as our metric
+model = NearestNeighbors(metric = 'cosine', algorithm = 'brute', n_neighbors = 20)
+model.fit(mat_movies)
+
+# movie recommender function
+
+
+def recommender(Movie_Name):
+    idx = process.extractOne(Movie_Name, movieData['Title'])[2]
+    print('Movie Selected : ', movieData['Title'][idx], 'Index: ', idx)
+    distance, indices = model.kneighbors(mat_movies[idx], n_neighbors = 6)
+
+    connections = []
+    for i, dist in zip(indices[0], distance[0]):
+        if i != idx:
+            similarity = 1 - dist
+            connections.append((movieData['Title'][idx], movieData['Title'][i], similarity))
+
+    return connections
+
+
+def add_unique_connections(df, connections):
+    for connection in connections:
+        if not ((df['Movie1'] == connection[0]) & (df['Movie2'] == connection[1])).any():
+            df = df.append({'Movie1': connection[0], 'Movie2': connection[1], 'Similarity': connection[2]}, ignore_index=True)
+    return df
+
+
+movie = input('What movie would you like recommendations based off of?\n') # read in movie
+recommendations = recommender(movie)
+recommendations_df = pd.DataFrame(recommendations, columns=['Connection', 'Title', 'Similarity'])
+connections_df = pd.DataFrame(columns=['Movie1', 'Movie2', 'Similarity'])
+connections_df = add_unique_connections(connections_df, recommendations)
+
+for movie in recommendations_df['Title']:
+    print(f"Recommendations for {movie}:")
+    new_recommendations = recommender(movie)
+    connections_df = add_unique_connections(connections_df, new_recommendations)
+    print()
+
+connections_df = pd.concat([connections_df['Movie1'], connections_df['Movie2']]).unique()
+connections_df = pd.DataFrame(connections_df, columns=['Title'])
+print(connections_df)
